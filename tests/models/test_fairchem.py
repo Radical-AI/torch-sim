@@ -1,10 +1,8 @@
 import pytest
 import torch
-from ase.build import bulk
 
-from torch_sim.io import atoms_to_state
+from tests.conftest import make_model_calculator_consistency_test
 from torch_sim.models.interface import validate_model_outputs
-from torch_sim.state import SimState
 
 
 try:
@@ -26,14 +24,6 @@ def model_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 @pytest.fixture
-def si_system(dtype: torch.dtype, device: torch.device) -> SimState:
-    # Create diamond cubic Silicon
-    si_dc = bulk("Si", "diamond", a=5.43)
-
-    return atoms_to_state([si_dc], device, dtype)
-
-
-@pytest.fixture
 def fairchem_model(model_path: str, device: torch.device) -> FairChemModel:
     cpu = device.type == "cpu"
     return FairChemModel(
@@ -48,36 +38,25 @@ def ocp_calculator(model_path: str) -> OCPCalculator:
     return OCPCalculator(checkpoint_path=model_path, cpu=False, seed=0)
 
 
-def test_fairchem_ocp_consistency(
-    fairchem_model: FairChemModel,
-    ocp_calculator: OCPCalculator,
-    device: torch.device,
-) -> None:
-    # Set up ASE calculator
-    si_dc = bulk("Si", "diamond", a=5.43)
-    si_dc.calc = ocp_calculator
-
-    si_state = atoms_to_state([si_dc], device, torch.float32)
-    # Get FairChem results
-    fairchem_results = fairchem_model.forward(si_state)
-
-    # Get OCP results
-    ocp_forces = torch.tensor(
-        si_dc.get_forces(),
-        device=device,
-        dtype=fairchem_results["forces"].dtype,
-    )
-
-    # Test consistency with reasonable tolerances
-    torch.testing.assert_close(
-        fairchem_results["energy"].item(),
-        si_dc.get_potential_energy(),
-        rtol=1e-2,
-        atol=1e-2,
-    )
-    torch.testing.assert_close(
-        fairchem_results["forces"], ocp_forces, rtol=1e-2, atol=1e-2
-    )
+test_fairchem_ocp_consistency = make_model_calculator_consistency_test(
+    test_name="fairchem_ocp",
+    model_fixture_name="fairchem_model",
+    calculator_fixture_name="ocp_calculator",
+    sim_state_names=[
+        "cu_sim_state",
+        "mg_sim_state",
+        "sb_sim_state",
+        "tio2_sim_state",
+        "ga_sim_state",
+        "niti_sim_state",
+        "ti_sim_state",
+        "si_sim_state",
+        "sio2_sim_state",
+        # "benzene_sim_state",  # TODO: Turn on when #111 fixed
+    ],
+    rtol=1e-2,
+    atol=1e-2,
+)
 
 
 # fairchem batching is broken on CPU, do not replicate this skipping
