@@ -1,6 +1,5 @@
 import copy
 import random
-import typing
 
 import numpy as np
 import pytest
@@ -10,29 +9,23 @@ from ase.optimize import FIRE
 
 from torch_sim.io import state_to_atoms
 from torch_sim.optimizers import frechet_cell_fire
-from torch_sim.state import SimState  # Removed unused concatenate_states
+from torch_sim.state import SimState
 
 
 try:
+    from mace.calculators import MACECalculator
     from mace.calculators.foundations_models import mace_mp
 
     from torch_sim.models.mace import MaceModel
 
-    if typing.TYPE_CHECKING:
-        from mace.calculators import (
-            MACECalculator,  # Import ASE calculator for type hints only
-        )
-
     MACE_AVAILABLE = True
 except ImportError:
     MACE_AVAILABLE = False
-    # If MACE is not available, skip all tests in this module.
     pytestmark = pytest.mark.skipif(not MACE_AVAILABLE, reason="MACE not installed")
 
 
 # Seed everything
 torch.manual_seed(123)
-# Replace legacy np.random.seed with Generator API
 rng = np.random.default_rng(123)
 random.seed(123)
 
@@ -42,7 +35,6 @@ def torchsim_mace_mp_model(device: torch.device) -> MaceModel:
     """Provides a MACE MP model instance for the optimizer tests."""
     # Use float64 for potentially higher precision needed in optimization
     dtype = torch.float64
-    # Ensure default_dtype is passed correctly for the raw model
     mace_model_raw = mace_mp(
         model="small", return_raw_model=True, default_dtype=str(dtype).split(".")[-1]
     )
@@ -51,34 +43,32 @@ def torchsim_mace_mp_model(device: torch.device) -> MaceModel:
         device=device,
         dtype=dtype,
         compute_forces=True,
-        compute_stress=True,  # Stress needed for cell optimization
+        compute_stress=True,
     )
 
 
 @pytest.fixture
 def ase_mace_mp_calculator(
     device: torch.device,
-) -> "MACECalculator":  # Use quotes if MACECalculator type hint causes issues
+) -> MACECalculator:
     """Provides an ASE MACECalculator instance using mace_mp."""
     # Ensure dtype matches the one used in the torchsim fixture (float64)
     dtype_str = str(torch.float64).split(".")[-1]
     # Use the mace_mp function to get the ASE calculator directly
     return mace_mp(
         model="small",
-        device=str(device),  # MACECalculator expects device as string
-        default_dtype=dtype_str,  # Match dtype
-        dispersion=False,  # Assuming no dispersion for this test
+        device=str(device),
+        default_dtype=dtype_str,
+        dispersion=False,
     )
 
 
 def test_unit_cell_frechet_fire_vs_ase(
     ar_supercell_sim_state: SimState,
-    # Use the MACE model fixtures defined in this file
     torchsim_mace_mp_model: MaceModel,
-    ase_mace_mp_calculator: "MACECalculator",
+    ase_mace_mp_calculator: MACECalculator,
 ) -> None:
     """Compare Frechet Cell FIRE optimizer with ASE's FIRE + ExpCellFilter using MACE."""
-    # pytest.importorskip("ase") # ASE import handled by module-level skipif
 
     # Use float64 for consistency with the MACE model fixture
     dtype = torch.float64
