@@ -293,7 +293,10 @@ class LennardJonesModel(torch.nn.Module, ModelInterface):
                     compute_forces=True)
                 - "stress": Stress tensor with shape [n_batches, 3, 3] (if
                     compute_stress=True)
-                - May include additional outputs based on configuration
+                - "energies": Per-atom energies with shape [n_atoms] (if
+                    per_atom_energies=True)
+                - "stresses": Per-atom stresses with shape [n_atoms, 3, 3] (if
+                    per_atom_stresses=True)
 
         Raises:
             ValueError: If batch cannot be inferred for multi-cell systems.
@@ -307,6 +310,8 @@ class LennardJonesModel(torch.nn.Module, ModelInterface):
             energy = results["energy"]  # Shape: [n_batches]
             forces = results["forces"]  # Shape: [n_atoms, 3]
             stress = results["stress"]  # Shape: [n_batches, 3, 3]
+            energies = results["energies"]  # Shape: [n_atoms]
+            stresses = results["stresses"]  # Shape: [n_atoms, 3, 3]
         """
         if isinstance(state, dict):
             state = SimState(**state, masses=torch.ones_like(state["positions"]))
@@ -324,7 +329,7 @@ class LennardJonesModel(torch.nn.Module, ModelInterface):
         for key in ("stress", "energy"):
             if key in properties:
                 results[key] = torch.stack([out[key] for out in outputs])
-        for key in ("forces",):
+        for key in ("forces", "energies", "stresses"):
             if key in properties:
                 results[key] = torch.cat([out[key] for out in outputs], dim=0)
 
