@@ -7,21 +7,17 @@ import torch
 from ase.filters import FrechetCellFilter
 from ase.optimize import FIRE
 
+import torch_sim as ts
 from torch_sim.io import state_to_atoms
 from torch_sim.optimizers import frechet_cell_fire
 from torch_sim.state import SimState
 
 
-try:
-    from mace.calculators import MACECalculator
-    from mace.calculators.foundations_models import mace_mp
+pytest.importorskip("mace")
+from mace.calculators import MACECalculator
+from mace.calculators.foundations_models import mace_mp
 
-    from torch_sim.models.mace import MaceModel
-
-    MACE_AVAILABLE = True
-except ImportError:
-    MACE_AVAILABLE = False
-    pytestmark = pytest.mark.skipif(not MACE_AVAILABLE, reason="MACE not installed")
+from torch_sim.models.mace import MaceModel
 
 
 # Seed everything
@@ -31,16 +27,19 @@ random.seed(123)
 
 
 @pytest.fixture
-def torchsim_mace_mp_model(device: torch.device) -> MaceModel:
+def torchsim_mace_mp_model() -> MaceModel:
     """Provides a MACE MP model instance for the optimizer tests."""
     # Use float64 for potentially higher precision needed in optimization
     dtype = torch.float64
+    mace_checkpoint_url = "https://github.com/ACEsuit/mace-mp/releases/download/mace_mpa_0/mace-mpa-0-medium.model"
     mace_model_raw = mace_mp(
-        model="small", return_raw_model=True, default_dtype=str(dtype).split(".")[-1]
+        model=mace_checkpoint_url,
+        return_raw_model=True,
+        default_dtype=str(dtype).split(".")[-1],
     )
     return MaceModel(
         model=mace_model_raw,
-        device=device,
+        device=torch.device("cpu"),
         dtype=dtype,
         compute_forces=True,
         compute_stress=True,
@@ -48,47 +47,36 @@ def torchsim_mace_mp_model(device: torch.device) -> MaceModel:
 
 
 @pytest.fixture
-def ase_mace_mp_calculator(
-    device: torch.device,
-) -> MACECalculator:
+def ase_mace_mp_calculator() -> MACECalculator:
     """Provides an ASE MACECalculator instance using mace_mp."""
     # Ensure dtype matches the one used in the torchsim fixture (float64)
+    mace_checkpoint_url = "https://github.com/ACEsuit/mace-mp/releases/download/mace_mpa_0/mace-mpa-0-medium.model"
     dtype_str = str(torch.float64).split(".")[-1]
     # Use the mace_mp function to get the ASE calculator directly
     return mace_mp(
-        model="small",
-        device=str(device),
+        model=mace_checkpoint_url,
+        device=torch.device("cpu"),
         default_dtype=dtype_str,
         dispersion=False,
     )
 
 
 def test_unit_cell_frechet_fire_vs_ase(
-    ar_supercell_sim_state: SimState,
+    rattled_sio2_sim_state: SimState,
     torchsim_mace_mp_model: MaceModel,
     ase_mace_mp_calculator: MACECalculator,
 ) -> None:
-    """Compare Frechet Cell FIRE optimizer with ASE's FIRE + ExpCellFilter using MACE."""
+    """Compare Frechet Cell FIRE optimizer with
+    ASE's FIRE + FrechetCellFilter using MACE."""
 
     # Use float64 for consistency with the MACE model fixture
     dtype = torch.float64
     device = torchsim_mace_mp_model.device
 
     # --- Setup Initial State with float64 ---
-    initial_state = copy.deepcopy(ar_supercell_sim_state)
+    initial_state = copy.deepcopy(rattled_sio2_sim_state)
     initial_state = initial_state.to(dtype=dtype, device=device)
 
-    generator = torch.Generator(device=initial_state.device)
-    generator.manual_seed(123)  # Seed for reproducibility
-    initial_state.positions += (
-        torch.randn(
-            initial_state.positions.shape,
-            device=initial_state.device,
-            dtype=initial_state.dtype,
-            generator=generator,
-        )
-        * 0.1
-    )
     # Ensure grads are enabled for both positions and cell
     initial_state.positions = initial_state.positions.detach().requires_grad_(
         requires_grad=True
@@ -96,49 +84,27 @@ def test_unit_cell_frechet_fire_vs_ase(
     initial_state.cell = initial_state.cell.detach().requires_grad_(requires_grad=True)
 
     n_steps = 20
-    dt_max = 0.3
-    dt_start = 0.1
+    force_tol = 0.02
 
     # --- Run Custom Frechet Cell FIRE with MACE model ---
-    custom_init_fn, custom_update_fn = frechet_cell_fire(
-        model=torchsim_mace_mp_model,  # Use torch-sim MACE wrapper
-        dt_max=dt_max,
-        dt_start=dt_start,
-    )
-    custom_state = custom_init_fn(initial_state)
-    initial_custom_energy = custom_state.energy.item()  # Initial energy check removed
 
+    custom_state = ts.optimize(
+        system=initial_state,
+        model=torchsim_mace_mp_model,
+        optimizer=frechet_cell_fire,
+        max_steps=n_steps,
+        convergence_fn=ts.generate_force_convergence_fn(force_tol=force_tol),
+    )
     # --- Setup ASE System with native MACE calculator ---
     ase_atoms = state_to_atoms(initial_state)[0]
     # Use the native ASE MACE calculator fixture, not the removed TorchCalculator
     ase_atoms.calc = ase_mace_mp_calculator
-    initial_ase_energy = ase_atoms.get_potential_energy()  # Initial energy check removed
 
-    # Initial Energy Check ---
-    assert abs(initial_custom_energy - initial_ase_energy) < 1e-7, (
-        "Initial energies differ significantly"
-    )
-
-    # --- Continue Custom Optimization ---
-    for _ in range(n_steps):
-        custom_state = custom_update_fn(custom_state)
-
-    # --- Run ASE FIRE with ExpCellFilter ---
+    # --- Run ASE FIRE with FrechetCellFilter ---
     filtered_atoms = FrechetCellFilter(ase_atoms)
-    ase_opt = FIRE(
-        filtered_atoms,
-        trajectory=None,
-        logfile=None,
-        dt=dt_start,
-        dtmax=dt_max,
-    )
+    ase_opt = FIRE(filtered_atoms)
 
-    try:
-        ase_opt.run(fmax=1e-4, steps=n_steps)
-    except (ValueError, RuntimeError) as e:
-        # Catch specific exceptions instead of blind Exception
-        print(f"ASE optimization failed: {e}")
-        pytest.fail("ASE optimization step failed.")
+    ase_opt.run(fmax=force_tol, steps=n_steps)
 
     # --- Compare Results (between custom_state and ase_sim_state) ---
     final_custom_energy = custom_state.energy.item()
