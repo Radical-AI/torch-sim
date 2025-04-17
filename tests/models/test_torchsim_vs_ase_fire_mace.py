@@ -39,7 +39,7 @@ def torchsim_mace_mp_model() -> MaceModel:
     )
     return MaceModel(
         model=mace_model_raw,
-        device=torch.device("cpu"),
+        device="cpu",
         dtype=dtype,
         compute_forces=True,
         compute_stress=True,
@@ -55,7 +55,7 @@ def ase_mace_mp_calculator() -> MACECalculator:
     # Use the mace_mp function to get the ASE calculator directly
     return mace_mp(
         model=mace_checkpoint_url,
-        device=torch.device("cpu"),
+        device="cpu",
         default_dtype=dtype_str,
         dispersion=False,
     )
@@ -74,8 +74,7 @@ def test_unit_cell_frechet_fire_vs_ase(
     device = torchsim_mace_mp_model.device
 
     # --- Setup Initial State with float64 ---
-    initial_state = copy.deepcopy(rattled_sio2_sim_state)
-    initial_state = initial_state.to(dtype=dtype, device=device)
+    initial_state = copy.deepcopy(rattled_sio2_sim_state).to(dtype=dtype, device=device)
 
     # Ensure grads are enabled for both positions and cell
     initial_state.positions = initial_state.positions.detach().requires_grad_(
