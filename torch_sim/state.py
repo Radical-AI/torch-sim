@@ -13,14 +13,7 @@ from typing import Literal, Self, TypeVar, Union
 
 import torch
 
-from torch_sim.io import (
-    atoms_to_state,
-    phonopy_to_state,
-    state_to_atoms,
-    state_to_phonopy,
-    state_to_structures,
-    structures_to_state,
-)
+import torch_sim as ts
 
 
 if typing.TYPE_CHECKING:
@@ -141,68 +134,49 @@ class SimState:
 
     @property
     def wrap_positions(self) -> torch.Tensor:
-        """Get positions wrapped into the primary unit cell.
-
-        Returns:
-            torch.Tensor: Atomic positions wrapped according to periodic boundary
-                conditions if pbc=True, otherwise returns unwrapped positions with
-                shape (n_atoms, 3).
+        """Atomic positions wrapped according to periodic boundary conditions if pbc=True,
+        otherwise returns unwrapped positions with shape (n_atoms, 3).
         """
         # TODO: implement a wrapping method
         return self.positions
 
     @property
     def device(self) -> torch.device:
-        """Get the device of the positions tensor.
-
-        Returns:
-            torch.device: The device where the tensor data is located
-        """
+        """The device where the tensor data is located."""
         return self.positions.device
 
     @property
     def dtype(self) -> torch.dtype:
-        """Get the data type of the positions tensor.
-
-        Returns:
-            torch.dtype: The data type of the positions tensor
-        """
+        """The data type of the positions tensor."""
         return self.positions.dtype
 
     @property
     def n_atoms(self) -> int:
-        """Get the total number of atoms in the system across all batches.
-
-        Returns:
-            int: Total number of atoms in the system
-        """
+        """Total number of atoms in the system across all batches."""
         return self.positions.shape[0]
 
     @property
-    def n_batches(self) -> int:
-        """Get the number of batches in the system.
+    def n_atoms_per_batch(self) -> torch.Tensor:
+        """Number of atoms per batch."""
+        return (
+            self.batch.bincount()
+            if self.batch is not None
+            else torch.tensor([self.n_atoms], device=self.device)
+        )
 
-        Returns:
-            int: Number of batches in the system
-        """
+    @property
+    def n_batches(self) -> int:
+        """Number of batches in the system."""
         return torch.unique(self.batch).shape[0]
 
     @property
     def volume(self) -> torch.Tensor:
-        """Get the volume of the system.
-
-        Returns:
-            torch.Tensor: Volume of the system with shape (n_batches,)
-        """
+        """Volume of the system."""
         return torch.det(self.cell) if self.pbc else None
 
     @property
     def column_vector_cell(self) -> torch.Tensor:
-        """Get the unit cell following the column vector convention.
-
-        Returns:
-            The unit cell in a column vector format
-        """
+        """Unit cell following the column vector convention."""
         return self.cell
 
     @column_vector_cell.setter
@@ -216,11 +190,7 @@ class SimState:
 
     @property
     def row_vector_cell(self) -> torch.Tensor:
-        """Get the unit cell following the row vector convention.
-
-        Returns:
-            The unit cell in a row vector format
-        """
+        """Unit cell following the row vector convention."""
         return self.cell.transpose(-2, -1)
 
     @row_vector_cell.setter
@@ -256,7 +226,7 @@ class SimState:
         Returns:
             list[Atoms]: A list of ASE Atoms objects, one per batch
         """
-        return state_to_atoms(self)
+        return ts.io.state_to_atoms(self)
 
     def to_structures(self) -> list["Structure"]:
         """Convert the SimState to a list of pymatgen Structure objects.
@@ -264,7 +234,7 @@ class SimState:
         Returns:
             list[Structure]: A list of pymatgen Structure objects, one per batch
         """
-        return state_to_structures(self)
+        return ts.io.state_to_structures(self)
 
     def to_phonopy(self) -> list["PhonopyAtoms"]:
         """Convert the SimState to a list of PhonopyAtoms objects.
@@ -272,7 +242,7 @@ class SimState:
         Returns:
             list[PhonopyAtoms]: A list of PhonopyAtoms objects, one per batch
         """
-        return state_to_phonopy(self)
+        return ts.io.state_to_phonopy(self)
 
     def split(self) -> list[Self]:
         """Split the SimState into a list of single-batch SimStates.
@@ -434,9 +404,7 @@ def _normalize_batch_indices(
 
 
 def state_to_device(
-    state: SimState,
-    device: torch.device | None = None,
-    dtype: torch.dtype | None = None,
+    state: SimState, device: torch.device | None = None, dtype: torch.dtype | None = None
 ) -> Self:
     """Convert the SimState to a new device and dtype.
 
@@ -919,9 +887,9 @@ def initialize_state(
         return concatenate_states(system)
 
     converters = [
-        ("pymatgen.core", "Structure", structures_to_state),
-        ("ase", "Atoms", atoms_to_state),
-        ("phonopy.structure.atoms", "PhonopyAtoms", phonopy_to_state),
+        ("pymatgen.core", "Structure", ts.io.structures_to_state),
+        ("ase", "Atoms", ts.io.atoms_to_state),
+        ("phonopy.structure.atoms", "PhonopyAtoms", ts.io.phonopy_to_state),
     ]
 
     # Try each converter

@@ -32,6 +32,7 @@ from typing import Literal, Self
 
 import torch
 
+import torch_sim as ts
 from torch_sim.state import SimState, StateDict
 
 
@@ -103,11 +104,7 @@ class ModelInterface(ABC):
 
     @property
     def device(self) -> torch.device:
-        """The device of the model.
-
-        Returns:
-            The device of the model
-        """
+        """The device of the model."""
         return self._device
 
     @device.setter
@@ -119,11 +116,7 @@ class ModelInterface(ABC):
 
     @property
     def dtype(self) -> torch.dtype:
-        """The data type of the model.
-
-        Returns:
-            The data type of the model
-        """
+        """The data type of the model."""
         return self._dtype
 
     @dtype.setter
@@ -135,11 +128,7 @@ class ModelInterface(ABC):
 
     @property
     def compute_stress(self) -> bool:
-        """Whether the model computes stresses.
-
-        Returns:
-            Whether the model computes stresses
-        """
+        """Whether the model computes stresses."""
         return self._compute_stress
 
     @compute_stress.setter
@@ -151,11 +140,7 @@ class ModelInterface(ABC):
 
     @property
     def compute_forces(self) -> bool:
-        """Whether the model computes forces.
-
-        Returns:
-            Whether the model computes forces
-        """
+        """Whether the model computes forces."""
         return self._compute_forces
 
     @compute_forces.setter
@@ -172,9 +157,6 @@ class ModelInterface(ABC):
         Models with radial neighbor cutoffs scale with "n_atoms_x_density",
         while models with a fixed number of neighbors scale with "n_atoms".
         Default is "n_atoms_x_density" because most models are radial cutoff based.
-
-        Returns:
-            The metric that the model scales with
         """
         return getattr(self, "_memory_scales_with", "n_atoms_x_density")
 
@@ -250,8 +232,6 @@ def validate_model_outputs(
     """
     from ase.build import bulk
 
-    from torch_sim.io import atoms_to_state
-
     assert model.dtype is not None
     assert model.device is not None
     assert model.compute_stress is not None
@@ -274,7 +254,7 @@ def validate_model_outputs(
     si_atoms = bulk("Si", "diamond", a=5.43, cubic=True)
     fe_atoms = bulk("Fe", "fcc", a=5.26, cubic=True).repeat([3, 1, 1])
 
-    sim_state = atoms_to_state([si_atoms, fe_atoms], device, dtype)
+    sim_state = ts.io.atoms_to_state([si_atoms, fe_atoms], device, dtype)
 
     og_positions = sim_state.positions.clone()
     og_cell = sim_state.cell.clone()
@@ -299,8 +279,8 @@ def validate_model_outputs(
     assert model_output["forces"].shape == (20, 3) if force_computed else True
     assert model_output["stress"].shape == (2, 3, 3) if stress_computed else True
 
-    si_state = atoms_to_state([si_atoms], device, dtype)
-    fe_state = atoms_to_state([fe_atoms], device, dtype)
+    si_state = ts.io.atoms_to_state([si_atoms], device, dtype)
+    fe_state = ts.io.atoms_to_state([fe_atoms], device, dtype)
 
     si_model_output = model.forward(si_state)
     assert torch.allclose(
