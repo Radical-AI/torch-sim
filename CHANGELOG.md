@@ -82,7 +82,7 @@
 
 ### Documentation 📖
 
-* Imoved model documentation, https://github.com/Radical-AI/torch-sim/pull/121 @orionarcher
+* Improved model documentation, https://github.com/Radical-AI/torch-sim/pull/121 @orionarcher
 * Plot of TorchSim module graph in docs, https://github.com/Radical-AI/torch-sim/pull/132 @janosh
 
 ### House-Keeping 🧹
