@@ -7,10 +7,10 @@ converting between different atomistic representations and handling simulation s
 
 import warnings
 from collections.abc import Callable
-from dataclasses import dataclass
-from itertools import chain
+from dataclasses import dataclass, make_dataclass
 
 import torch
+from tqdm import tqdm
 
 from torch_sim.autobatching import BinningAutoBatcher, InFlightAutoBatcher
 from torch_sim.models.interface import ModelInterface
@@ -106,6 +106,7 @@ def integrate(
     timestep: float,
     trajectory_reporter: TrajectoryReporter | dict | None = None,
     autobatcher: BinningAutoBatcher | bool = False,
+    pbar: bool | dict[str, str | float | bool] = False,
     **integrator_kwargs: dict,
 ) -> SimState:
     """Simulate a system using a model and integrator.
@@ -123,6 +124,9 @@ def integrate(
             tracking trajectory. If a dict, will be passed to the TrajectoryReporter
             constructor.
         autobatcher (BinningAutoBatcher | bool): Optional autobatcher to use
+        pbar (bool | dict[str, str | float | bool], optional): Show a progress bar.
+            Only works with an autobatcher in interactive shell. If a dict is given,
+            it's passed to `tqdm` as kwargs.
         **integrator_kwargs: Additional keyword arguments for integrator init function
 
     Returns:
@@ -154,6 +158,14 @@ def integrate(
 
     final_states: list[SimState] = []
     og_filenames = trajectory_reporter.filenames if trajectory_reporter else None
+
+    pbar_tracker = None
+    if pbar and autobatcher:
+        pbar_kwargs = pbar if isinstance(pbar, dict) else {}
+        pbar_kwargs.setdefault("desc", "Integrate")
+        pbar_kwargs.setdefault("disable", None)
+        pbar_tracker = tqdm(total=state.n_batches, **pbar_kwargs)
+
     for state, batch_indices in batch_iterator:
         state = init_fn(state)
 
@@ -173,6 +185,8 @@ def integrate(
 
         # finish the trajectory reporter
         final_states.append(state)
+        if pbar_tracker:
+            pbar_tracker.update(state.n_batches)
 
     if trajectory_reporter:
         trajectory_reporter.finish()
@@ -316,6 +330,7 @@ def optimize(
     autobatcher: InFlightAutoBatcher | bool = False,
     max_steps: int = 10_000,
     steps_between_swaps: int = 5,
+    pbar: bool | dict[str, str | float | bool] = False,
     **optimizer_kwargs: dict,
 ) -> SimState:
     """Optimize a system using a model and optimizer.
@@ -341,6 +356,9 @@ def optimize(
         max_steps (int): Maximum number of total optimization steps
         steps_between_swaps: Number of steps to take before checking convergence
             and swapping out states.
+        pbar (bool | dict[str, str | float | bool], optional): Show a progress bar.
+            Only works with an autobatcher in interactive shell. If a dict is given,
+            it's passed to `tqdm` as kwargs.
 
     Returns:
         Optimized system state
@@ -375,6 +393,14 @@ def optimize(
     last_energy = None
     all_converged_states, convergence_tensor = [], None
     og_filenames = trajectory_reporter.filenames if trajectory_reporter else None
+
+    pbar_tracker = None
+    if pbar and autobatcher:
+        pbar_kwargs = pbar if isinstance(pbar, dict) else {}
+        pbar_kwargs.setdefault("desc", "Optimize")
+        pbar_kwargs.setdefault("disable", None)
+        pbar_tracker = tqdm(total=state.n_batches, **pbar_kwargs)
+
     while (result := autobatcher.next_batch(state, convergence_tensor))[0] is not None:
         state, converged_states, batch_indices = result
         all_converged_states.extend(converged_states)
@@ -399,6 +425,9 @@ def optimize(
                 break
 
         convergence_tensor = convergence_fn(state, last_energy)
+        if pbar_tracker:
+            # assume convergence_tensor shape is correct
+            pbar_tracker.update(torch.count_nonzero(convergence_tensor).item())
 
     all_converged_states.extend(result[1])
 
@@ -418,14 +447,12 @@ def static(
     *,
     trajectory_reporter: TrajectoryReporter | dict | None = None,
     autobatcher: BinningAutoBatcher | bool = False,
-) -> list[dict[str, torch.Tensor]]:
+    pbar: bool | dict[str, str | float | bool] = False,
+) -> SimState:
     """Run single point calculations on a batch of systems.
 
-    Unlike the other runners, this function does not return a state. Instead, it
-    returns a list of dictionaries, one for each batch in the input state. Each
-    dictionary contains the properties calculated for that batch. It will also
-    modify the state in place with the "energy", "forces", and "stress" properties
-    if they are present in the model output.
+    Returns state with "energy", "forces", "stress", and optionally other fields defined
+    in the trajectory_reporter's prop_calculators.
 
     Args:
         system (StateLike): Input system to calculate properties for
@@ -440,9 +467,12 @@ def static(
             `state_kwargs` argument.
         autobatcher (BinningAutoBatcher | bool): Optional autobatcher to use for
             batching calculations
+        pbar (bool | dict[str, str | float | bool], optional): Show a progress bar.
+            Only works with an autobatcher in interactive shell. If a dict is given,
+            it's passed to `tqdm` as kwargs.
 
     Returns:
-        list[dict[str, torch.Tensor]]: Maps of property names to tensors for all batches
+        SimState: state with properties attached
     """
     # initialize the state
     state: SimState = initialize_state(system, model.device, model.dtype)
@@ -464,14 +494,34 @@ def static(
     )
 
     @dataclass
-    class StaticState(type(state)):
+    class _StaticState(type(state)):
         energy: torch.Tensor
         forces: torch.Tensor | None
         stress: torch.Tensor | None
 
+    # prop_calculator: dict[int, dict[str, _]], we want dict[str, _]
+    extra_prop_keys = [
+        prop_key
+        for prop_key in next(iter(trajectory_reporter.prop_calculators.values()))
+        if prop_key not in ["energy", "forces", "stress"]
+    ]
+    # dynamically extend class fields for extra properties
+    StaticState = make_dataclass(
+        cls_name="StaticState",
+        fields=[(prop_key, torch.Tensor, None) for prop_key in extra_prop_keys],
+        bases=(_StaticState,),
+    )
+
     final_states: list[SimState] = []
-    all_props: list[dict[str, torch.Tensor]] = []
     og_filenames = trajectory_reporter.filenames
+
+    pbar_tracker = None
+    if pbar and autobatcher:
+        pbar_kwargs = pbar if isinstance(pbar, dict) else {}
+        pbar_kwargs.setdefault("desc", "Static")
+        pbar_kwargs.setdefault("disable", None)
+        pbar_tracker = tqdm(total=state.n_batches, **pbar_kwargs)
+
     for substate, batch_indices in batch_iterator:
         # set up trajectory reporters
         if autobatcher and trajectory_reporter and og_filenames is not None:
@@ -490,15 +540,17 @@ def static(
         )
 
         props = trajectory_reporter.report(substate, 0, model=model)
-        all_props.extend(props)
+
+        for prop_key in extra_prop_keys:
+            setattr(substate, prop_key, torch.concat([prop[prop_key] for prop in props]))
 
         final_states.append(substate)
+        if pbar_tracker:
+            pbar_tracker.update(substate.n_batches)
 
     trajectory_reporter.finish()
 
     if isinstance(batch_iterator, BinningAutoBatcher):
-        # reorder properties to match original order of states
-        original_indices = list(chain.from_iterable(batch_iterator.index_bins))
-        return [all_props[idx] for idx in original_indices]
+        final_states = batch_iterator.restore_original_order(final_states)
 
-    return all_props
+    return concatenate_states(final_states)
