@@ -457,9 +457,8 @@ def fire_ase(  # noqa: PLR0915
             results = model(state)
             state.forces = results["forces"]
             state.energy = results["energy"]
-            power = torch.tensor(
-                -1.0, device=device, dtype=dtype
-            )  # Force uphill response
+            # Force uphill response
+            power = torch.tensor(-1.0, device=device, dtype=dtype)
         if power > 0:  # Moving downhill
             # Mix velocity with normalized force
             f_norm = torch.sqrt(torch.sum(state.forces**2, dtype=dtype) + eps)
@@ -490,8 +489,8 @@ def fire_ase(  # noqa: PLR0915
         state.positions = state.positions + dr
         # Update forces and energy at new positions
         results = model(state)
-        state.forces = results["forces"]
-        state.energy = results["energy"]
+        for key in ("forces", "energy"):
+            setattr(state, key, results[key])
         return state
 
     return fire_init, fire_step
