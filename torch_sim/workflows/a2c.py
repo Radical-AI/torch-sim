@@ -311,7 +311,7 @@ def random_packed_structure(
             positions=positions_cart,
             masses=torch.ones(N_atoms, device=device, dtype=dtype),
             atomic_numbers=atomic_numbers,
-            cell=cell,
+            cell=cell.unsqueeze(0),  # unsqueeze since simstate requires a batch dimension
             pbc=True,
         )
         fire_init, fire_update = fire(model=model)
