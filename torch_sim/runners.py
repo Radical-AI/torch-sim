@@ -278,12 +278,16 @@ def _chunked_apply(
     return concatenate_states(ordered_states)
 
 
-def generate_force_convergence_fn(force_tol: float = 1e-1) -> Callable:
+def generate_force_convergence_fn(
+    force_tol: float = 1e-1, *, include_cell_forces: bool = False
+) -> Callable:
     """Generate a force-based convergence function for the convergence_fn argument
     of the optimize function.
 
     Args:
         force_tol (float): Force tolerance for convergence
+        include_cell_forces (bool): Whether to include the `cell_forces` in
+            the convergence check.
 
     Returns:
         Convergence function that takes a state and last energy and
@@ -295,7 +299,14 @@ def generate_force_convergence_fn(force_tol: float = 1e-1) -> Callable:
         last_energy: torch.Tensor | None = None,  # noqa: ARG001
     ) -> bool:
         """Check if the system has converged."""
-        return batchwise_max_force(state) < force_tol
+        force_conv = batchwise_max_force(state) < force_tol
+        if not include_cell_forces:
+            return force_conv
+
+        cell_forces_norm, _ = state.cell_forces.norm(dim=2).max(dim=1)
+        cell_force_conv = cell_forces_norm < force_tol
+
+        return force_conv & cell_force_conv
 
     return convergence_fn
 

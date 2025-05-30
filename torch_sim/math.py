@@ -987,3 +987,28 @@ def matrix_log_33(
             print(msg)
         # Fall back to scipy implementation
         return matrix_log_scipy(matrix).to(sim_dtype)
+
+
+def batched_vdot(
+    x: torch.Tensor, y: torch.Tensor, batch_indices: torch.Tensor
+) -> torch.Tensor:
+    """Computes batched vdot (sum of element-wise product) for groups of vectors.
+    If is_sum_sq is True, computes sum of x_i * x_i (squared norm components).
+
+    Args:
+        x: Tensor of shape [N_total_entities, D] (e.g., forces, velocities).
+        y: Tensor of shape [N_total_entities, D].
+        batch_indices: Tensor of shape [N_total_entities] indicating batch membership.
+
+    Returns:
+        Tensor: shape [n_batches] where each element is the sum(x_i * y_i)
+        (or sum(x_i * x_i) if is_sum_sq) for entities belonging to that batch,
+        summed over all components D and all entities in the batch.
+    """
+    if x.ndim != 2 or batch_indices.ndim != 1 or x.shape[0] != batch_indices.shape[0]:
+        raise ValueError(f"Invalid input shapes: {x.shape=}, {batch_indices.shape=}")
+
+    output = torch.zeros(batch_indices.max() + 1, dtype=x.dtype, device=x.device)
+    output.scatter_add_(dim=0, index=batch_indices, src=(x * y).sum(dim=1))
+
+    return output
