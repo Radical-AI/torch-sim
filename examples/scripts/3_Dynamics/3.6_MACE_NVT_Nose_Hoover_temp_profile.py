@@ -19,13 +19,9 @@ from mace.calculators.foundations_models import mace_mp
 from plotly.subplots import make_subplots
 
 import torch_sim as ts
-from torch_sim.models.mace import MaceUrls
+from torch_sim.integrators.nvt import nvt_nose_hoover, nvt_nose_hoover_invariant
+from torch_sim.models.mace import MaceModel, MaceUrls
 from torch_sim.quantities import calc_kT
-from torch_sim.unbatched.models.mace import UnbatchedMaceModel
-from torch_sim.unbatched.unbatched_integrators import (
-    nvt_nose_hoover,
-    nvt_nose_hoover_invariant,
-)
 from torch_sim.units import MetalUnits as Units
 
 
@@ -100,11 +96,12 @@ cooling_temp = 300
 annealing_temp = 300
 
 # Step counts for different phases
-n_steps_initial = 20 if os.getenv("CI") else 200
-n_steps_ramp_up = 20 if os.getenv("CI") else 200
-n_steps_melt = 20 if os.getenv("CI") else 200
-n_steps_ramp_down = 20 if os.getenv("CI") else 200
-n_steps_anneal = 20 if os.getenv("CI") else 200
+SMOKE_TEST = os.getenv("CI") is not None
+n_steps_initial = 20 if SMOKE_TEST else 200
+n_steps_ramp_up = 20 if SMOKE_TEST else 200
+n_steps_melt = 20 if SMOKE_TEST else 200
+n_steps_ramp_down = 20 if SMOKE_TEST else 200
+n_steps_anneal = 20 if SMOKE_TEST else 200
 
 n_steps = (
     n_steps_initial + n_steps_ramp_up + n_steps_melt + n_steps_ramp_down + n_steps_anneal
@@ -124,16 +121,8 @@ random_species = np.random.default_rng(seed=0).choice(
 )
 fcc_lattice.set_chemical_symbols(random_species)
 
-# Prepare input tensors
-positions = torch.tensor(fcc_lattice.positions, device=device, dtype=dtype)
-cell = torch.tensor(fcc_lattice.cell.array, device=device, dtype=dtype)
-atomic_numbers = torch.tensor(
-    fcc_lattice.get_atomic_numbers(), device=device, dtype=torch.int
-)
-masses = torch.tensor(fcc_lattice.get_masses(), device=device, dtype=dtype)
-
-# Initialize the unbatched MACE model
-model = UnbatchedMaceModel(
+# Initialize the MACE model
+model = MaceModel(
     model=loaded_model,
     device=device,
     compute_forces=True,
@@ -141,19 +130,14 @@ model = UnbatchedMaceModel(
     dtype=dtype,
     enable_cueq=False,
 )
-state = ts.SimState(
-    positions=positions,
-    masses=masses,
-    cell=cell,
-    pbc=True,
-    atomic_numbers=atomic_numbers,
-)
+state = ts.io.atoms_to_state(fcc_lattice, device=device, dtype=dtype)
+
 # Run initial inference
 results = model(state)
 
 # Set up simulation parameters
 dt = 0.002 * Units.time
-kT = init_temp * Units.temperature
+kT = torch.tensor(init_temp, device=device, dtype=dtype) * Units.temperature
 
 nvt_init, nvt_update = nvt_nose_hoover(model=model, kT=kT, dt=dt)
 state = nvt_init(state, kT=kT, seed=1)
@@ -178,7 +162,10 @@ for step in range(n_steps):
     )
 
     # Calculate current temperature and save data
-    temp = calc_kT(masses=state.masses, momenta=state.momenta) / Units.temperature
+    temp = (
+        calc_kT(masses=state.masses, momenta=state.momenta, batch=state.batch)
+        / Units.temperature
+    )
     actual_temps[step] = temp
     expected_temps[step] = current_kT
 

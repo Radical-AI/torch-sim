@@ -1,4 +1,4 @@
-"""Batched MACE FIRE optimizer."""
+"""Batched MACE unit cell filter with FIRE optimizer."""
 
 # /// script
 # dependencies = [
@@ -15,7 +15,8 @@ from mace.calculators.foundations_models import mace_mp
 
 import torch_sim as ts
 from torch_sim.models.mace import MaceModel, MaceUrls
-from torch_sim.optimizers import fire
+from torch_sim.optimizers import unit_cell_fire
+from torch_sim.units import UnitConversion
 
 
 # Set device and data type
@@ -35,7 +36,8 @@ loaded_model = mace_mp(
 # loaded_model = torch.load(MODEL_PATH, map_location=device)
 
 # Number of steps to run
-N_steps = 10 if os.getenv("CI") else 500
+SMOKE_TEST = os.getenv("CI") is not None
+N_steps = 10 if SMOKE_TEST else 500
 
 # Set random seed for reproducibility
 rng = np.random.default_rng(seed=0)
@@ -77,19 +79,41 @@ state = ts.io.atoms_to_state(atoms_list, device=device, dtype=dtype)
 results = model(state)
 
 # Initialize unit cell gradient descent optimizer
-init_fn, update_fn = fire(
+fire_init, fire_update = unit_cell_fire(
     model=model,
+    cell_factor=None,  # Will default to atoms per batch
+    hydrostatic_strain=False,
+    constant_volume=False,
+    scalar_pressure=0.0,
 )
 
-state = init_fn(state)
+state = fire_init(state)
 
 # Run optimization for a few steps
-print("\nRunning FIRE:")
+print("\nRunning batched unit cell gradient descent:")
 for step in range(N_steps):
-    if step % 20 == 0:
-        print(f"Step {step}, Energy: {[energy.item() for energy in state.energy]}")
+    P1 = -torch.trace(state.stress[0]) * UnitConversion.eV_per_Ang3_to_GPa / 3
+    P2 = -torch.trace(state.stress[1]) * UnitConversion.eV_per_Ang3_to_GPa / 3
+    P3 = -torch.trace(state.stress[2]) * UnitConversion.eV_per_Ang3_to_GPa / 3
 
-    state = update_fn(state)
+    if step % 20 == 0:
+        print(
+            f"Step {step}, Energy: {[energy.item() for energy in state.energy]}, "
+            f"P1={P1:.4f} GPa, P2={P2:.4f} GPa, P3={P3:.4f} GPa"
+        )
+
+    state = fire_update(state)
 
 print(f"Initial energies: {[energy.item() for energy in results['energy']]} eV")
 print(f"Final energies: {[energy.item() for energy in state.energy]} eV")
+
+initial_pressure = [
+    torch.trace(stress).item() * UnitConversion.eV_per_Ang3_to_GPa / 3
+    for stress in results["stress"]
+]
+final_pressure = [
+    torch.trace(stress).item() * UnitConversion.eV_per_Ang3_to_GPa / 3
+    for stress in state.stress
+]
+print(f"{initial_pressure=} GPa")
+print(f"{final_pressure=} GPa")
