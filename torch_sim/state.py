@@ -7,8 +7,7 @@ operations and conversion to/from various atomistic formats.
 import copy
 import importlib
 import warnings
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Literal, Self, TypeVar, cast
 
 import torch
 
@@ -22,7 +21,6 @@ if TYPE_CHECKING:
     from pymatgen.core import Structure
 
 
-@dataclass
 class SimState:
     """State representation for atomistic systems with batched operations support.
 
@@ -80,10 +78,25 @@ class SimState:
     cell: torch.Tensor
     pbc: bool  # TODO: do all calculators support mixed pbc?
     atomic_numbers: torch.Tensor
-    batch: torch.Tensor | None = field(default=None, kw_only=True)
+    batch: torch.Tensor
 
-    def __post_init__(self) -> None:
-        """Validate and process the state after initialization."""
+    def __init__(
+        self,
+        positions: torch.Tensor,
+        masses: torch.Tensor,
+        cell: torch.Tensor,
+        pbc: bool,
+        atomic_numbers: torch.Tensor,
+        batch: torch.Tensor | None = None,
+    ) -> None:
+        """Initialize the SimState."""
+        self.positions = positions
+        self.masses = masses
+        self.cell = cell
+        self.pbc = pbc
+        self.atomic_numbers = atomic_numbers
+
+        # Validate and process the state after initialization.
         # data validation and fill batch
         # should make pbc a tensor here
         # if devices aren't all the same, raise an error, in a clean way
@@ -106,19 +119,20 @@ class SimState:
                 f"masses {shapes[1]}, atomic_numbers {shapes[2]}"
             )
 
-        if self.cell.ndim != 3 and self.batch is None:
+        if self.cell.ndim != 3 and batch is None:
             self.cell = self.cell.unsqueeze(0)
 
         if self.cell.shape[-2:] != (3, 3):
             raise ValueError("Cell must have shape (n_batches, 3, 3)")
 
-        if self.batch is None:
+        if batch is None:
             self.batch = torch.zeros(self.n_atoms, device=self.device, dtype=torch.int64)
         else:
             # assert that batch indices are unique consecutive integers
-            _, counts = torch.unique_consecutive(self.batch, return_counts=True)
-            if not torch.all(counts == torch.bincount(self.batch)):
+            _, counts = torch.unique_consecutive(batch, return_counts=True)
+            if not torch.all(counts == torch.bincount(batch)):
                 raise ValueError("Batch indices must be unique consecutive integers")
+            self.batch = batch
 
         if self.cell.shape[0] != self.n_batches:
             raise ValueError(
@@ -165,7 +179,9 @@ class SimState:
     @property
     def volume(self) -> torch.Tensor:
         """Volume of the system."""
-        return torch.det(self.cell) if self.pbc else None
+        if not self.pbc:
+            raise ValueError("Volume is only defined for periodic systems")
+        return torch.det(self.cell)
 
     @property
     def column_vector_cell(self) -> torch.Tensor:
@@ -275,7 +291,7 @@ class SimState:
         for attr_name, attr_value in vars(modified_state).items():
             setattr(self, attr_name, attr_value)
 
-        return popped_states
+        return cast("list[Self]", popped_states)
 
     def to(
         self, device: torch.device | None = None, dtype: torch.dtype | None = None
@@ -312,7 +328,13 @@ class SimState:
         return _slice_state(self, batch_indices)
 
 
-class DeformGradMixin:
+class MDSimState(SimState):
+    """SimState with additional velocity and mass attributes."""
+    velocities: torch.Tensor
+    masses: torch.Tensor
+
+
+class DeformGradMixin(MDSimState):
     """Mixin for states that support deformation gradients."""
 
     @property
@@ -396,11 +418,14 @@ def _normalize_batch_indices(
     raise TypeError(f"Unsupported index type: {type(batch_indices)}")
 
 
+SimStateT = TypeVar("SimStateT", bound=SimState)
+
+
 def state_to_device(
-    state: SimState,
+    state: SimStateT,
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
-) -> Self:
+) -> SimStateT:
     """Convert the SimState to a new device and dtype.
 
     Creates a new SimState with all tensors moved to the specified device and
@@ -606,9 +631,9 @@ def _filter_attrs_by_mask(
 
 
 def _split_state(
-    state: SimState,
+    state: SimStateT,
     ambiguous_handling: Literal["error", "globalize"] = "error",
-) -> list[SimState]:
+) -> list[SimStateT]:
     """Split a SimState into a list of states, each containing a single batch element.
 
     Divides a multi-batch state into individual single-batch states, preserving
@@ -714,10 +739,10 @@ def _pop_states(
 
 
 def _slice_state(
-    state: SimState,
+    state: SimStateT,
     batch_indices: list[int] | torch.Tensor,
     ambiguous_handling: Literal["error", "globalize"] = "error",
-) -> SimState:
+) -> SimStateT:
     """Slice a substate from the SimState containing only the specified batch indices.
 
     Creates a new SimState containing only the specified batches, preserving
@@ -877,9 +902,10 @@ def initialize_state(
         return state_to_device(system, device, dtype)
 
     if isinstance(system, list) and all(isinstance(s, SimState) for s in system):
-        if not all(state.n_batches == 1 for state in system):
+        # TODO(curtis): should we just auto convert it? or is the PERF overhead not worth it?
+        if not all(cast("SimState", state).n_batches == 1 for state in system):
             raise ValueError(
-                "When providing a list of states, to the initialize_state function, "
+                "When providing a list of states to the initialize_state function, "
                 "all states must have n_batches == 1. To fix this, you can split the "
                 "states into individual states with the split_state function."
             )
