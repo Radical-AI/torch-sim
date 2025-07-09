@@ -7,7 +7,8 @@ operations and conversion to/from various atomistic formats.
 import copy
 import importlib
 import warnings
-from typing import TYPE_CHECKING, Literal, Self, TypeVar, cast
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Literal, Self, TypedDict, TypeVar, cast
 
 import torch
 
@@ -79,6 +80,9 @@ class SimState:
     pbc: bool  # TODO: do all calculators support mixed pbc?
     atomic_numbers: torch.Tensor
     batch: torch.Tensor
+
+    node_features: dict[str, torch.Tensor] = field(default_factory=dict)
+    graph_features: dict[str, torch.Tensor] = field(default_factory=dict)
 
     def __init__(
         self,
@@ -330,6 +334,7 @@ class SimState:
 
 class MDSimState(SimState):
     """SimState with additional velocity and mass attributes."""
+
     velocities: torch.Tensor
     masses: torch.Tensor
 
@@ -538,6 +543,19 @@ def infer_property_scope(
     return scope
 
 
+# in a simstate, each attribute is one of these three types.
+# do we register the attribute kind under a set of attribute names?
+# do we just store all of the attributes under these three keys in simstate? (I don't think so)
+class PropertyAttributes(TypedDict):
+    atomwise: dict[str, torch.Tensor]
+    graphwise: dict[str, torch.Tensor]
+    shared: dict[str, torch.Tensor]
+
+
+def _get_property_attrs2():
+    """Get property attributes2"""
+
+
 def _get_property_attrs(
     state: SimState, ambiguous_handling: Literal["error", "globalize"] = "error"
 ) -> dict[str, dict]:
@@ -683,6 +701,13 @@ def _split_state(
     return states
 
 
+@dataclass
+class Attributes:
+    shared_attributes: dict[str, torch.Tensor] = field(default_factory=dict)
+    per_graph_attributes: dict[str, torch.Tensor] = field(default_factory=dict)
+    per_atom_attributes: dict[str, torch.Tensor] = field(default_factory=dict)
+
+
 def _pop_states(
     state: SimState,
     pop_indices: list[int] | torch.Tensor,
@@ -739,10 +764,10 @@ def _pop_states(
 
 
 def _slice_state(
-    state: SimStateT,
+    state: SimState,
     batch_indices: list[int] | torch.Tensor,
     ambiguous_handling: Literal["error", "globalize"] = "error",
-) -> SimStateT:
+) -> SimState:
     """Slice a substate from the SimState containing only the specified batch indices.
 
     Creates a new SimState containing only the specified batches, preserving
