@@ -589,7 +589,9 @@ def fire(
             atomic_numbers=state.atomic_numbers.clone(),
             system_idx=state.system_idx.clone(),
             pbc=state.pbc,
-            velocities=None,
+            velocities=torch.full(
+                state.positions.shape, torch.nan, device=device, dtype=dtype
+            ),
             forces=forces,
             energy=energy,
             # Optimization attributes
@@ -862,13 +864,17 @@ def unit_cell_fire(
             atomic_numbers=state.atomic_numbers.clone(),
             system_idx=state.system_idx.clone(),
             pbc=state.pbc,
-            velocities=None,
+            velocities=torch.full(
+                state.positions.shape, torch.nan, device=device, dtype=dtype
+            ),
             forces=forces,
             energy=energy,
             stress=stress,
             # Cell attributes
             cell_positions=torch.zeros(n_systems, 3, 3, device=device, dtype=dtype),
-            cell_velocities=None,
+            cell_velocities=torch.full(
+                cell_forces.shape, torch.nan, device=device, dtype=dtype
+            ),
             cell_forces=cell_forces,
             cell_masses=cell_masses,
             # Optimization attributes
@@ -1161,13 +1167,17 @@ def frechet_cell_fire(
             atomic_numbers=state.atomic_numbers,
             system_idx=state.system_idx,
             pbc=state.pbc,
-            velocities=None,
+            velocities=torch.full(
+                state.positions.shape, torch.nan, device=device, dtype=dtype
+            ),
             forces=forces,
             energy=energy,
             stress=stress,
             # Cell attributes
             cell_positions=cell_positions,
-            cell_velocities=None,
+            cell_velocities=torch.full(
+                cell_forces.shape, torch.nan, device=device, dtype=dtype
+            ),
             cell_forces=cell_forces,
             cell_masses=cell_masses,
             # Optimization attributes
@@ -1244,15 +1254,19 @@ def _vv_fire_step(  # noqa: C901, PLR0915
     dtype = state.positions.dtype
     deform_grad_new: torch.Tensor | None = None
 
-    if state.velocities is None:
-        state.velocities = torch.zeros_like(state.positions)
+    nan_velocities = state.velocities.isnan().any(dim=1)
+    if nan_velocities.any():
+        state.velocities[nan_velocities] = torch.zeros_like(
+            state.positions[nan_velocities]
+        )
         if is_cell_optimization:
             if not isinstance(state, AnyFireCellState):
                 raise ValueError(
                     f"Cell optimization requires one of {get_args(AnyFireCellState)}."
                 )
-            state.cell_velocities = torch.zeros(
-                (n_systems, 3, 3), device=device, dtype=dtype
+            nan_cell_velocities = state.cell_velocities.isnan().any(dim=(1, 2))
+            state.cell_velocities[nan_cell_velocities] = torch.zeros_like(
+                state.cell_positions[nan_cell_velocities]
             )
 
     alpha_start_system = torch.full(
@@ -1461,16 +1475,20 @@ def _ase_fire_step(  # noqa: C901, PLR0915
 
     cur_deform_grad = None  # Initialize cur_deform_grad to prevent UnboundLocalError
 
-    if state.velocities is None:
-        state.velocities = torch.zeros_like(state.positions)
+    nan_velocities = state.velocities.isnan().any(dim=1)
+    if nan_velocities.any():
+        state.velocities[nan_velocities] = torch.zeros_like(
+            state.positions[nan_velocities]
+        )
         forces = state.forces
         if is_cell_optimization:
             if not isinstance(state, AnyFireCellState):
                 raise ValueError(
                     f"Cell optimization requires one of {get_args(AnyFireCellState)}."
                 )
-            state.cell_velocities = torch.zeros(
-                (n_systems, 3, 3), device=device, dtype=dtype
+            nan_cell_velocities = state.cell_velocities.isnan().any(dim=(1, 2))
+            state.cell_velocities[nan_cell_velocities] = torch.zeros_like(
+                state.cell_positions[nan_cell_velocities]
             )
             cur_deform_grad = state.deform_grad()
     else:
