@@ -130,7 +130,7 @@ def soft_sphere_pair_force(
     return transforms.safe_mask(mask, fn, dr)
 
 
-class SoftSphereModel(torch.nn.Module, ModelInterface):
+class SoftSphereModel(ModelInterface):
     """Calculator for soft sphere potential energies and forces.
 
     Implements a model for computing properties based on the soft sphere potential,
@@ -435,7 +435,7 @@ class SoftSphereModel(torch.nn.Module, ModelInterface):
         return results
 
 
-class SoftSphereMultiModel(torch.nn.Module):
+class SoftSphereMultiModel(ModelInterface):
     """Calculator for systems with multiple particle types.
 
     Extends the basic soft sphere model to support multiple particle types with
