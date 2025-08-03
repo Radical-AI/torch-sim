@@ -1475,23 +1475,23 @@ def _ase_fire_step(  # noqa: C901, PLR0915
 
     cur_deform_grad = None  # Initialize cur_deform_grad to prevent UnboundLocalError
 
-    nan_velocities = state.velocities.isnan().any(dim=1)
-    if nan_velocities.any():
-        state.velocities[nan_velocities] = torch.zeros_like(
-            state.positions[nan_velocities]
-        )
-        forces = state.forces
-        if is_cell_optimization:
-            if not isinstance(state, AnyFireCellState):
-                raise ValueError(
-                    f"Cell optimization requires one of {get_args(AnyFireCellState)}."
-                )
-            nan_cell_velocities = state.cell_velocities.isnan().any(dim=(1, 2))
-            state.cell_velocities[nan_cell_velocities] = torch.zeros_like(
-                state.cell_positions[nan_cell_velocities]
+    # nan_velocities = state.velocities.isnan().any(dim=1)
+    # if nan_velocities.any():
+    #     state.velocities[nan_velocities] = torch.zeros_like(
+    #         state.positions[nan_velocities]
+    #     )
+    forces = state.forces
+    if is_cell_optimization:
+        if not isinstance(state, AnyFireCellState):
+            raise ValueError(
+                f"Cell optimization requires one of {get_args(AnyFireCellState)}."
             )
-            cur_deform_grad = state.deform_grad()
-    else:
+        # nan_cell_velocities = state.cell_velocities.isnan().any(dim=(1, 2))
+        # state.cell_velocities[nan_cell_velocities] = torch.zeros_like(
+        #     state.cell_positions[nan_cell_velocities]
+        # )
+        cur_deform_grad = state.deform_grad()
+    if True:
         alpha_start_system = torch.full(
             (n_systems,), alpha_start.item(), device=device, dtype=dtype
         )
