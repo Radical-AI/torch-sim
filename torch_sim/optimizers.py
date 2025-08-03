@@ -1475,95 +1475,85 @@ def _ase_fire_step(  # noqa: C901, PLR0915
 
     cur_deform_grad = None  # Initialize cur_deform_grad to prevent UnboundLocalError
 
-    # nan_velocities = state.velocities.isnan().any(dim=1)
-    # if nan_velocities.any():
-    #     state.velocities[nan_velocities] = torch.zeros_like(
-    #         state.positions[nan_velocities]
-    #     )
+    velocities = state.velocities.nan_to_num(nan=0.0)
     forces = state.forces
     if is_cell_optimization:
         if not isinstance(state, AnyFireCellState):
             raise ValueError(
                 f"Cell optimization requires one of {get_args(AnyFireCellState)}."
             )
-        # nan_cell_velocities = state.cell_velocities.isnan().any(dim=(1, 2))
-        # state.cell_velocities[nan_cell_velocities] = torch.zeros_like(
-        #     state.cell_positions[nan_cell_velocities]
-        # )
+        cell_velocities = state.cell_velocities.nan_to_num(nan=0.0)
         cur_deform_grad = state.deform_grad()
-    if True:
-        alpha_start_system = torch.full(
-            (n_systems,), alpha_start.item(), device=device, dtype=dtype
+
+    alpha_start_system = torch.full(
+        (n_systems,), alpha_start.item(), device=device, dtype=dtype
+    )
+
+    if is_cell_optimization:
+        cur_deform_grad = state.deform_grad()
+        forces = torch.bmm(
+            state.forces.unsqueeze(1), cur_deform_grad[state.system_idx]
+        ).squeeze(1)
+    else:
+        forces = state.forces
+
+    # 1. Current power (F·v) per system (atoms + cell)
+    system_power = tsm.batched_vdot(forces, velocities, state.system_idx)
+
+    if is_cell_optimization:
+        system_power += (cell_velocities * state.cell_forces).sum(dim=(1, 2))
+
+    # 2. Update dt, alpha, n_pos
+    pos_mask_system = system_power > 0.0
+    neg_mask_system = ~pos_mask_system
+
+    inc_mask = (state.n_pos > n_min) & pos_mask_system
+    state.dt[inc_mask] = torch.minimum(state.dt[inc_mask] * f_inc, dt_max)
+    state.alpha[inc_mask] *= f_alpha
+    state.n_pos[pos_mask_system] += 1
+
+    state.dt[neg_mask_system] *= f_dec
+    state.alpha[neg_mask_system] = alpha_start_system[neg_mask_system]
+    state.n_pos[neg_mask_system] = 0
+
+    # 3. Velocity mixing BEFORE acceleration (ASE ordering)
+    v_scaling_system = tsm.batched_vdot(velocities, velocities, state.system_idx)
+    f_scaling_system = tsm.batched_vdot(forces, forces, state.system_idx)
+
+    if is_cell_optimization:
+        v_scaling_system += cell_velocities.pow(2).sum(dim=(1, 2))
+        f_scaling_system += state.cell_forces.pow(2).sum(dim=(1, 2))
+
+        v_scaling_cell = torch.sqrt(v_scaling_system.view(n_systems, 1, 1))
+        f_scaling_cell = torch.sqrt(f_scaling_system.view(n_systems, 1, 1))
+        v_mixing_cell = state.cell_forces / (f_scaling_cell + eps) * v_scaling_cell
+
+        alpha_cell_bc = state.alpha.view(n_systems, 1, 1)
+        cell_velocities = torch.where(
+            pos_mask_system.view(n_systems, 1, 1),
+            (1.0 - alpha_cell_bc) * cell_velocities + alpha_cell_bc * v_mixing_cell,
+            torch.zeros_like(cell_velocities),
         )
 
-        if is_cell_optimization:
-            cur_deform_grad = state.deform_grad()
-            forces = torch.bmm(
-                state.forces.unsqueeze(1), cur_deform_grad[state.system_idx]
-            ).squeeze(1)
-        else:
-            forces = state.forces
+    v_scaling_atom = torch.sqrt(v_scaling_system[state.system_idx].unsqueeze(-1))
+    f_scaling_atom = torch.sqrt(f_scaling_system[state.system_idx].unsqueeze(-1))
+    v_mixing_atom = forces * (v_scaling_atom / (f_scaling_atom + eps))
 
-        # 1. Current power (F·v) per system (atoms + cell)
-        system_power = tsm.batched_vdot(forces, state.velocities, state.system_idx)
-
-        if is_cell_optimization:
-            system_power += (state.cell_forces * state.cell_velocities).sum(dim=(1, 2))
-
-        # 2. Update dt, alpha, n_pos
-        pos_mask_system = system_power > 0.0
-        neg_mask_system = ~pos_mask_system
-
-        inc_mask = (state.n_pos > n_min) & pos_mask_system
-        state.dt[inc_mask] = torch.minimum(state.dt[inc_mask] * f_inc, dt_max)
-        state.alpha[inc_mask] *= f_alpha
-        state.n_pos[pos_mask_system] += 1
-
-        state.dt[neg_mask_system] *= f_dec
-        state.alpha[neg_mask_system] = alpha_start_system[neg_mask_system]
-        state.n_pos[neg_mask_system] = 0
-
-        # 3. Velocity mixing BEFORE acceleration (ASE ordering)
-        v_scaling_system = tsm.batched_vdot(
-            state.velocities, state.velocities, state.system_idx
-        )
-        f_scaling_system = tsm.batched_vdot(forces, forces, state.system_idx)
-
-        if is_cell_optimization:
-            v_scaling_system += state.cell_velocities.pow(2).sum(dim=(1, 2))
-            f_scaling_system += state.cell_forces.pow(2).sum(dim=(1, 2))
-
-            v_scaling_cell = torch.sqrt(v_scaling_system.view(n_systems, 1, 1))
-            f_scaling_cell = torch.sqrt(f_scaling_system.view(n_systems, 1, 1))
-            v_mixing_cell = state.cell_forces / (f_scaling_cell + eps) * v_scaling_cell
-
-            alpha_cell_bc = state.alpha.view(n_systems, 1, 1)
-            state.cell_velocities = torch.where(
-                pos_mask_system.view(n_systems, 1, 1),
-                (1.0 - alpha_cell_bc) * state.cell_velocities
-                + alpha_cell_bc * v_mixing_cell,
-                torch.zeros_like(state.cell_velocities),
-            )
-
-        v_scaling_atom = torch.sqrt(v_scaling_system[state.system_idx].unsqueeze(-1))
-        f_scaling_atom = torch.sqrt(f_scaling_system[state.system_idx].unsqueeze(-1))
-        v_mixing_atom = forces * (v_scaling_atom / (f_scaling_atom + eps))
-
-        alpha_atom = state.alpha[state.system_idx].unsqueeze(-1)  # per-atom alpha
-        state.velocities = torch.where(
-            pos_mask_system[state.system_idx].unsqueeze(-1),
-            (1.0 - alpha_atom) * state.velocities + alpha_atom * v_mixing_atom,
-            torch.zeros_like(state.velocities),
-        )
+    alpha_atom = state.alpha[state.system_idx].unsqueeze(-1)  # per-atom alpha
+    velocities = torch.where(
+        pos_mask_system[state.system_idx].unsqueeze(-1),
+        (1.0 - alpha_atom) * velocities + alpha_atom * v_mixing_atom,
+        torch.zeros_like(velocities),
+    )
 
     # 4. Acceleration (single forward-Euler, no mass for ASE FIRE)
-    state.velocities += forces * state.dt[state.system_idx].unsqueeze(-1)
-    dr_atom = state.velocities * state.dt[state.system_idx].unsqueeze(-1)
+    velocities += forces * state.dt[state.system_idx].unsqueeze(-1)
+    dr_atom = velocities * state.dt[state.system_idx].unsqueeze(-1)
     dr_scaling_system = tsm.batched_vdot(dr_atom, dr_atom, state.system_idx)
 
     if is_cell_optimization:
-        state.cell_velocities += state.cell_forces * state.dt.view(n_systems, 1, 1)
-        dr_cell = state.cell_velocities * state.dt.view(n_systems, 1, 1)
+        cell_velocities += state.cell_forces * state.dt.view(n_systems, 1, 1)
+        dr_cell = cell_velocities * state.dt.view(n_systems, 1, 1)
 
         dr_scaling_system += dr_cell.pow(2).sum(dim=(1, 2))
         dr_scaling_cell = torch.sqrt(dr_scaling_system).view(n_systems, 1, 1)
@@ -1619,9 +1609,11 @@ def _ase_fire_step(  # noqa: C901, PLR0915
     results = model(state)
     state.forces = results["forces"]
     state.energy = results["energy"]
+    state.velocities = velocities
 
     if is_cell_optimization:
         state.stress = results["stress"]
+        state.cell_velocities = cell_velocities
         volumes = torch.linalg.det(state.cell).view(n_systems, 1, 1)
         if torch.any(volumes <= 0):
             bad_indices = torch.where(volumes <= 0)[0].tolist()

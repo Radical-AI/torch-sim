@@ -954,11 +954,9 @@ def concatenate_states(
 
     # Concatenate collected tensors
     for prop, tensors in per_atom_tensors.items():
-        # if tensors:
         concatenated[prop] = torch.cat(tensors, dim=0)
 
     for prop, tensors in per_system_tensors.items():
-        # if tensors:
         concatenated[prop] = torch.cat(tensors, dim=0)
 
     # Concatenate system indices
