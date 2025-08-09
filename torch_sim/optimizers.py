@@ -33,6 +33,28 @@ from torch_sim.typing import StateDict
 MdFlavor = Literal["vv_fire", "ase_fire"]
 vv_fire_key, ase_fire_key = get_args(MdFlavor)
 
+md_atom_attributes = (*SimState._atom_attributes, "forces", "velocities")  # noqa: SLF001
+_fire_system_attributes = (
+    *SimState._system_attributes,  # noqa: SLF001
+    *DeformGradMixin._system_attributes,  # noqa: SLF001
+    "energy",
+    "stress",
+    "cell_positions",
+    "cell_velocities",
+    "cell_forces",
+    "cell_masses",
+    "cell_factor",
+    "pressure",
+    "dt",
+    "alpha",
+    "n_pos",
+)
+_fire_global_attributes = (
+    *SimState._global_attributes,  # noqa: SLF001
+    "hydrostatic_strain",
+    "constant_volume",
+)
+
 
 @dataclass
 class GDState(SimState):
@@ -55,6 +77,9 @@ class GDState(SimState):
 
     forces: torch.Tensor
     energy: torch.Tensor
+
+    _atom_attributes = (*SimState._atom_attributes, "forces")  # noqa: SLF001
+    _system_attributes = (*SimState._system_attributes, "energy")  # noqa: SLF001
 
 
 def gradient_descent(
@@ -149,7 +174,7 @@ def gradient_descent(
     return gd_init, gd_step
 
 
-@dataclass
+@dataclass(kw_only=True)
 class UnitCellGDState(GDState, DeformGradMixin):
     """State class for batched gradient descent optimization with unit cell.
 
@@ -184,6 +209,7 @@ class UnitCellGDState(GDState, DeformGradMixin):
 
     # Required attributes not in BatchedGDState
     reference_cell: torch.Tensor
+    row_vector_cell: torch.Tensor
     cell_factor: torch.Tensor
     hydrostatic_strain: bool
     constant_volume: bool
@@ -194,6 +220,22 @@ class UnitCellGDState(GDState, DeformGradMixin):
     cell_positions: torch.Tensor
     cell_forces: torch.Tensor
     cell_masses: torch.Tensor
+
+    _system_attributes = (
+        *GDState._system_attributes,  # noqa: SLF001
+        *DeformGradMixin._system_attributes,  # noqa: SLF001
+        "cell_forces",
+        "pressure",
+        "stress",
+        "cell_positions",
+        "cell_factor",
+        "cell_masses",
+    )
+    _global_attributes = (
+        *GDState._global_attributes,  # noqa: SLF001
+        "hydrostatic_strain",
+        "constant_volume",
+    )
 
 
 def unit_cell_gradient_descent(  # noqa: PLR0915, C901
@@ -438,7 +480,7 @@ def unit_cell_gradient_descent(  # noqa: PLR0915, C901
     return gd_init, gd_step
 
 
-@dataclass
+@dataclass(kw_only=True)
 class FireState(SimState):
     """State information for batched FIRE optimization.
 
@@ -481,6 +523,9 @@ class FireState(SimState):
     dt: torch.Tensor
     alpha: torch.Tensor
     n_pos: torch.Tensor
+
+    _atom_attributes = md_atom_attributes
+    _system_attributes = (*SimState._system_attributes, "energy", "dt", "alpha", "n_pos")  # noqa: SLF001
 
 
 def fire(
@@ -619,7 +664,7 @@ def fire(
     return fire_init, functools.partial(step_func, **step_func_kwargs)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class UnitCellFireState(SimState, DeformGradMixin):
     """State information for batched FIRE optimization with unit cell degrees of
     freedom.
@@ -680,9 +725,10 @@ class UnitCellFireState(SimState, DeformGradMixin):
     cell_velocities: torch.Tensor
     cell_forces: torch.Tensor
     cell_masses: torch.Tensor
+    reference_cell: torch.Tensor
+    row_vector_cell: torch.Tensor
 
     # Optimization-specific attributes
-    reference_cell: torch.Tensor
     cell_factor: torch.Tensor
     pressure: torch.Tensor
     hydrostatic_strain: bool
@@ -692,6 +738,10 @@ class UnitCellFireState(SimState, DeformGradMixin):
     dt: torch.Tensor
     alpha: torch.Tensor
     n_pos: torch.Tensor
+
+    _atom_attributes = md_atom_attributes
+    _system_attributes = _fire_system_attributes
+    _global_attributes = _fire_global_attributes
 
 
 def unit_cell_fire(
@@ -907,7 +957,7 @@ def unit_cell_fire(
     return fire_init, functools.partial(step_func, **step_func_kwargs)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class FrechetCellFIREState(SimState, DeformGradMixin):
     """State class for batched FIRE optimization with Frechet cell derivatives.
 
@@ -965,6 +1015,7 @@ class FrechetCellFIREState(SimState, DeformGradMixin):
 
     # Optimization-specific attributes
     reference_cell: torch.Tensor
+    row_vector_cell: torch.Tensor
     cell_factor: torch.Tensor
     pressure: torch.Tensor
     hydrostatic_strain: bool
@@ -980,6 +1031,10 @@ class FrechetCellFIREState(SimState, DeformGradMixin):
     dt: torch.Tensor
     alpha: torch.Tensor
     n_pos: torch.Tensor
+
+    _atom_attributes = md_atom_attributes
+    _system_attributes = _fire_system_attributes
+    _global_attributes = _fire_global_attributes
 
 
 def frechet_cell_fire(

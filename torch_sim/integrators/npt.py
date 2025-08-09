@@ -15,6 +15,7 @@ from torch_sim.integrators.md import (
     construct_nose_hoover_chain,
 )
 from torch_sim.models.interface import ModelInterface
+from torch_sim.optimizers import md_atom_attributes
 from torch_sim.quantities import calc_kinetic_energy
 from torch_sim.state import SimState
 from torch_sim.typing import StateDict
@@ -66,6 +67,17 @@ class NPTLangevinState(SimState):
     cell_positions: torch.Tensor
     cell_velocities: torch.Tensor
     cell_masses: torch.Tensor
+
+    _atom_attributes = md_atom_attributes
+    _system_attributes = (
+        *SimState._system_attributes,  # noqa: SLF001
+        "stress",
+        "cell_positions",
+        "cell_velocities",
+        "cell_masses",
+        "reference_cell",
+        "energy",
+    )
 
     @property
     def momenta(self) -> torch.Tensor:
@@ -866,6 +878,21 @@ class NPTNoseHooverState(MDState):
     # Barostat variables
     barostat: NoseHooverChain
     barostat_fns: NoseHooverChainFns
+
+    _system_attributes = (
+        *MDState._system_attributes,  # noqa: SLF001
+        "reference_cell",
+        "cell_position",
+        "cell_momentum",
+        "cell_mass",
+    )
+    _global_attributes = (
+        *MDState._global_attributes,  # noqa: SLF001
+        "thermostat",
+        "barostat",
+        "thermostat_fns",
+        "barostat_fns",
+    )
 
     @property
     def velocities(self) -> torch.Tensor:

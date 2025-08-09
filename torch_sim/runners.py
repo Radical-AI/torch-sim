@@ -541,6 +541,9 @@ def static(
         forces: torch.Tensor
         stress: torch.Tensor
 
+        _atom_attributes = (*state._atom_attributes, "forces")  # noqa: SLF001
+        _system_attributes = (*state._system_attributes, "energy", "stress")  # noqa: SLF001
+
     all_props: list[dict[str, torch.Tensor]] = []
     og_filenames = trajectory_reporter.filenames
 

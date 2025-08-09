@@ -37,6 +37,7 @@ for this example, but any TorchSim compatible model would work.
 import torch
 import torch_sim as ts
 from mace.calculators.foundations_models import mace_mp
+from torch_sim.integrators.md import MDState
 from torch_sim.models.mace import MaceModel
 
 # Initialize the mace model
@@ -104,6 +105,7 @@ class HybridSwapMCState(ts.integrators.MDState):
     """
 
     last_permutation: torch.Tensor
+    _system_attributes = (*MDState._system_attributes, "last_permutation")  # noqa: SLF001
 
 
 # %% [markdown]

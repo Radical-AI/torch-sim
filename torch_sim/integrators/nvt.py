@@ -266,6 +266,12 @@ class NVTNoseHooverState(MDState):
     chain: NoseHooverChain
     _chain_fns: NoseHooverChainFns
 
+    _global_attributes = (
+        *MDState._global_attributes,  # noqa: SLF001
+        "chain",
+        "_chain_fns",
+    )
+
     @property
     def velocities(self) -> torch.Tensor:
         """Velocities calculated from momenta and masses with shape
