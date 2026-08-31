@@ -528,6 +528,27 @@ def test_fallback_when_alchemiops_unavailable(monkeypatch: pytest.MonkeyPatch) -
     assert mapping2.shape[1] > 0
 
 
+def test_alchemiops_import_guard_non_nvidia_builds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """nvalchemiops is flagged unavailable on non-NVIDIA GPU torch builds.
+
+    On ROCm builds ``torch.version.cuda`` is ``None`` even though a GPU is
+    present, and on CPU-only builds ``torch.cuda.is_available()`` is ``False``.
+    alcheimops works on CPUs, and on NVIDIA GPUs, but not on non-NVIDIA GPUs.
+    """
+    from torch_sim.neighbors.alchemiops import _import_nvalchemiops_batch_neighbors
+
+    # Simulate a ROCm build: HIP is available, but there is no CUDA runtime.
+    monkeypatch.setattr(torch.version, "cuda", None)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert _import_nvalchemiops_batch_neighbors() is None
+
+    # Simulate a CPU build.
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert _import_nvalchemiops_batch_neighbors() is not None
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU not available for testing")
 def test_torchsim_nl_gpu() -> None:
     """Test that torchsim_nl works on GPU (CUDA/ROCm)."""

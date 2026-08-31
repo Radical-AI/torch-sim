@@ -17,6 +17,13 @@ _batch_cell_list: object | None = None
 
 def _import_nvalchemiops_batch_neighbors() -> tuple[object, object] | None:
     """Return ``(batch_cell_list, batch_naive_neighbor_list)`` if importable."""
+    # nvalchemiops is NVIDIA-CUDA-only (built on warp) for GPUs
+    # It does not work on non-NVIDIA builds.  In particular, on ROCm
+    # builds, nvalchemiops will fail during runtime, even though
+    # Python bindings are imported without issues.
+    if torch.version.cuda is None\
+       and torch.cuda.is_available():  # On ROCm, == True
+        return None
     try:
         from nvalchemiops.torch.neighbors import batch_cell_list as bcl
         from nvalchemiops.torch.neighbors import batch_naive_neighbor_list as bnl
