@@ -40,7 +40,39 @@ from torch_sim.models.interface import ModelInterface
 from torch_sim.units import UnitConversion
 
 
+def _normalize_system_parameter(
+    value: torch.Tensor,
+    n_systems: int,
+    *,
+    name: str,
+) -> torch.Tensor:
+    """Broadcast a bias parameter to one value per system.
+
+    Args:
+        value: Already unit-converted 1-D tensor holding either a single shared
+            value or one value per system.
+        n_systems: Number of systems in the current batch.
+        name: Parameter name, used in the error message.
+
+    Returns:
+        Tensor of shape ``(n_systems,)``.
+
+    Raises:
+        ValueError: If *value* holds neither 1 nor ``n_systems`` entries.
+    """
+    if value.numel() == 1:
+        return value.expand(n_systems)
+    if value.numel() == n_systems:
+        return value
+    raise ValueError(
+        f"{name} has {value.numel()} entries but the batch has {n_systems} systems; "
+        f"pass either a scalar (shared by all systems) or {n_systems} values"
+    )
+
+
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from torch_sim.state import SimState
 
 
@@ -191,11 +223,19 @@ class RMSDCV(ModelInterface):
     geometries). Because the buffer is shaped to the batch seen first, the
     model must be re-:meth:`reset` before reuse with a different batch.
 
+    Both ``k_push`` and ``alpha_width`` accept either a scalar, shared by every
+    system in the batch, or one value per system. Per-system values let a single
+    batched evaluation run several replicas of the same molecule under different
+    bias settings, as the CREST iMTD parameter schedule requires.
+
     Args:
-        k_push: Bias strength in Hartree (converted to eV internally).
+        k_push: Bias strength in Hartree (converted to eV internally). A float,
+            sequence, or tensor; a scalar is shared by all systems, otherwise
+            the length must equal the batch's number of systems.
             Defaults to 1.0.
         alpha_width: Gaussian width in 1/Bohr^2 (converted to 1/Angstrom^2
-            internally). Defaults to 1.0.
+            internally). Same scalar-or-per-system convention as *k_push*.
+            Defaults to 1.0.
         n_refs: Maximum number of stored references; oldest are dropped.
             Defaults to 10.
         update_interval: Deposit a new reference every this many calls.
@@ -215,12 +255,18 @@ class RMSDCV(ModelInterface):
 
         bias = RMSDCV(k_push=0.02, alpha_width=1.2, n_refs=20, update_interval=50)
         metad_model = SumModel(mace_model, bias)
+
+        # three replicas of one molecule, each with its own bias setting
+        bias = RMSDCV(
+            k_push=torch.tensor([0.03, 0.015, 0.0075]),
+            alpha_width=torch.tensor([1.3, 0.78, 0.468]),
+        )
     """
 
     def __init__(
         self,
-        k_push: float = 1.0,
-        alpha_width: float = 1.0,
+        k_push: float | Sequence[float] | torch.Tensor = 1.0,
+        alpha_width: float | Sequence[float] | torch.Tensor = 1.0,
         n_refs: int = 10,
         update_interval: int = 1,
         atom_mask: torch.Tensor | None = None,
@@ -241,8 +287,20 @@ class RMSDCV(ModelInterface):
         self._memory_scales_with = "n_atoms"
 
         self.energy_label = str(energy_label)
-        self.k_push = float(k_push) * UnitConversion.Hartree_to_eV
-        self.alpha = float(alpha_width) * UnitConversion.Ang_to_Bohr**2
+        # Kept as 1-D tensors rather than floats so a batch can carry one value
+        # per system; they are broadcast against the batch inside forward().
+        self.k_push: torch.Tensor
+        self.alpha: torch.Tensor
+        self.register_buffer(
+            "k_push",
+            self._as_parameter_tensor(k_push, "k_push")
+            * float(UnitConversion.Hartree_to_eV),
+        )
+        self.register_buffer(
+            "alpha",
+            self._as_parameter_tensor(alpha_width, "alpha_width")
+            * float(UnitConversion.Ang_to_Bohr) ** 2,
+        )
         self.n_refs = int(n_refs)
         self.update_interval = int(update_interval)
         atom_mask = None if atom_mask is None else atom_mask.to(self._device, torch.bool)
@@ -256,6 +314,28 @@ class RMSDCV(ModelInterface):
             device=self._device,
             dtype=self._dtype,
         )
+
+    def _as_parameter_tensor(
+        self, value: float | Sequence[float] | torch.Tensor, name: str
+    ) -> torch.Tensor:
+        """Coerce a bias parameter to a 1-D tensor on the model's device/dtype.
+
+        Args:
+            value: Scalar, sequence, or tensor of bias parameters.
+            name: Parameter name, used in the error message.
+
+        Returns:
+            A 1-D tensor; scalars become shape ``(1,)``.
+
+        Raises:
+            ValueError: If the value is empty or not finite.
+        """
+        tensor = torch.as_tensor(value, device=self._device, dtype=self._dtype).flatten()
+        if tensor.numel() == 0:
+            raise ValueError(f"{name} must hold at least one value")
+        if not bool(torch.isfinite(tensor).all()):
+            raise ValueError(f"{name} must be finite, got {tensor}")
+        return tensor
 
     @property
     def ref_buf(self) -> torch.Tensor | None:
@@ -358,7 +438,16 @@ class RMSDCV(ModelInterface):
             sq = diff.pow(2).sum(dim=-1)  # (X, n_biased)
             rmsd2 = _segment_sum(sq, system_idx, n_systems, dim=1) / (3 * counts)
 
-            energy = self.k_push * torch.exp(-self.alpha * rmsd2).sum(dim=0)  # (M,)
+            # (n_systems,) each; a scalar parameter broadcasts to every system.
+            k_push = _normalize_system_parameter(
+                self.k_push, n_systems, name="k_push"
+            ).to(rmsd2)
+            alpha = _normalize_system_parameter(
+                self.alpha, n_systems, name="alpha_width"
+            ).to(rmsd2)
+            # rmsd2 is (n_refs, n_systems), so alpha broadcasts along the
+            # reference axis and each system keeps its own bias parameters.
+            energy = k_push * torch.exp(-alpha.unsqueeze(0) * rmsd2).sum(dim=0)  # (M,)
             grad = torch.autograd.grad(energy.sum(), pos)[0]
 
         forces = torch.zeros_like(state.positions)
