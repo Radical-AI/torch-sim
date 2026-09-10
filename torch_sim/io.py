@@ -133,11 +133,11 @@ def state_to_structures(  # noqa: C901
 
     Args:
         state (SimState): Batched state containing positions, cell, and atomic numbers
-        system_extras_map: Map of ``{ts_key: ase_key}`` controlling which
-            ``_system_extras`` entries are written to ``atoms.info``.
+        system_extras_map: Map of ``{ts_key: pymatgen_key}`` controlling which
+            ``_system_extras`` entries are written to ``structure.properties``.
             ``None`` (default) means no extras are written.
-        atom_extras_map: Map of ``{ts_key: ase_key}`` controlling which
-            ``_atom_extras`` entries are written to ``atoms.arrays``.
+        atom_extras_map: Map of ``{ts_key: pymatgen_key}`` controlling which
+            ``_atom_extras`` entries are written to ``structure.site_properties``.
             ``None`` (default) means no extras are written.
 
     Returns:
