@@ -1158,7 +1158,7 @@ class TorchSimTrajectory:
 
         return arrays
 
-    def get_structure(self, frame: int = -1) -> Any:
+    def get_structure(self, frame: int = -1, **kwargs: Any) -> Any:
         """Get a pymatgen Structure object for a given frame.
 
         Converts the state at the specified frame to a pymatgen Structure object
@@ -1166,6 +1166,7 @@ class TorchSimTrajectory:
 
         Args:
             frame (int, optional): Frame index to retrieve. Defaults to -1 for last frame.
+            **kwargs: Additional keyword arguments to pass to ``state_to_structures``.
 
         Returns:
             Structure: Pymatgen Structure object for the specified frame
@@ -1175,7 +1176,9 @@ class TorchSimTrajectory:
         """
         from torch_sim.io import state_to_structures
 
-        return state_to_structures(self.get_state(frame, device=torch.device("cpu")))[0]
+        return state_to_structures(
+            self.get_state(frame, device=torch.device("cpu")), **kwargs
+        )[0]
 
     def get_atoms(self, frame: int = -1, **kwargs: Any) -> "Atoms":
         """Get an ASE Atoms object for a given frame.
